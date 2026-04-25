@@ -63,16 +63,27 @@ def _extract_video_meta(message: object) -> tuple[str | None, int, str | None]:
             filename = attr.file_name
     if not is_video and not (doc.mime_type or "").startswith("video/"):
         return None, 0, None
+
+    # unique_id ni olish — avval file.unique_id, keyin doc.id fallback
+    unique_id: str | None = None
     file = getattr(message, "file", None)
-    unique_id: str | None = getattr(file, "unique_id", None) if file else None
+    if file is not None:
+        unique_id = getattr(file, "unique_id", None)
+    if not unique_id:
+        # Fallback: document.id ni ishlatish (har doim mavjud)
+        unique_id = str(doc.id)
     return unique_id, duration, filename
 
 
 async def _handle_channel_message(event: events.NewMessage.Event) -> None:
     message = event.message
-    peer_id = getattr(event.chat, "id", None)
+    chat = event.chat
+    peer_id = getattr(chat, "id", None)
     if peer_id is None:
         return
+
+    chat_title = getattr(chat, "title", str(peer_id))
+    log.debug("Kanal xabari: chat=%s (%s) msg_id=%s", peer_id, chat_title, message.id)
 
     candidates = [peer_id]
     if peer_id > 0:
@@ -89,6 +100,7 @@ async def _handle_channel_message(event: events.NewMessage.Event) -> None:
             rules = await get_rules_for_channel(session, cid)
             if rules:
                 matched_channel_id = cid
+                log.debug("Qoidalar topildi: channel=%s qoidalar=%s", cid, len(rules))
                 break
 
         if not rules:
@@ -97,35 +109,49 @@ async def _handle_channel_message(event: events.NewMessage.Event) -> None:
             if not is_known:
                 return
 
+        # Video tekshirish
         unique_id, duration, filename = _extract_video_meta(message)
         if unique_id is None:
+            log.debug("Video emas yoki media yo'q: chat=%s msg_id=%s", peer_id, message.id)
             return
         if duration and duration < settings.MIN_VIDEO_DURATION:
-            log.info("Skip (qisqa video duration=%ss) uid=%s", duration, unique_id)
+            log.info("Skip (qisqa video duration=%ss) uid=%s chat=%s", duration, unique_id, chat_title)
             return
         if await is_forwarded(session, unique_id):
-            log.info("Skip (allaqachon yuborilgan) uid=%s", unique_id)
+            log.info("Skip (allaqachon yuborilgan) uid=%s chat=%s", unique_id, chat_title)
             return
 
         caption_text = message.message or ""
+        log.info("Video topildi: chat=%s uid=%s caption=%r", chat_title, unique_id, caption_text[:100])
+
         meta = parse_meta(caption_text or filename or "")
         anime_id: int | None = None
         episode: int | None = meta.episode
         start_episode: int = 1
 
+        log.debug("parse_meta natijasi: episode=%s title=%r season=%s", meta.episode, meta.title, meta.season)
+
         # 1-usul: Qoidalar bilan moslashtirish
         if rules:
             for rule in rules:
-                if match_pattern(caption_text, rule.pattern, rule.pattern_type):
+                matched = match_pattern(caption_text, rule.pattern, rule.pattern_type)
+                log.debug(
+                    "Qoida #%s tekshirish: pattern=%r type=%s matched=%s",
+                    rule.id, rule.pattern, rule.pattern_type, matched,
+                )
+                if matched:
                     anime_id = rule.anime_id
                     start_episode = rule.start_episode
+                    log.info(
+                        "Qoida mos keldi: #%s -> anime=%s start_ep=%s",
+                        rule.id, anime_id, start_episode,
+                    )
                     break
 
         # 2-usul: Anime nomi bilan auto-detect (kaworai DB -> mahalliy DB)
         if anime_id is None and meta.title:
             norm = normalize_name(meta.title)
             if norm:
-                # Avval kaworai PostgreSQL dan qidirish
                 kaworai_result = await lookup_anime_by_name(norm, meta.season)
                 if kaworai_result is not None:
                     anime_id = kaworai_result[0]
@@ -134,7 +160,6 @@ async def _handle_channel_message(event: events.NewMessage.Event) -> None:
                         meta.title, anime_id, kaworai_result[1],
                     )
                 else:
-                    # Mahalliy SQLite dan qidirish (fallback)
                     local_anime = await find_anime_by_normalized_name(
                         session, norm, meta.season,
                     )
@@ -146,8 +171,8 @@ async def _handle_channel_message(event: events.NewMessage.Event) -> None:
 
         if anime_id is None:
             log.info(
-                "Skip (anime aniqlanmadi) channel=%s uid=%s caption=%r",
-                matched_channel_id, unique_id, caption_text[:80],
+                "Skip (anime aniqlanmadi) channel=%s (%s) uid=%s caption=%r",
+                matched_channel_id, chat_title, unique_id, caption_text[:80],
             )
             return
 
@@ -166,6 +191,7 @@ async def _handle_channel_message(event: events.NewMessage.Event) -> None:
             return
 
     caption_out = f"ID: {anime_id}\nQism: {episode}"
+    log.info("SECRET_CHANNEL ga yuborish: %s (uid=%s)", caption_out.replace(chr(10), " | "), unique_id)
     try:
         await event.client.send_file(
             settings.SECRET_CHANNEL_ID,
@@ -190,8 +216,8 @@ async def _handle_channel_message(event: events.NewMessage.Event) -> None:
         await session.commit()
 
     log.info(
-        "SECRET_CHANNEL ga yuborildi: anime=%s ep=%s uid=%s channel=%s",
-        anime_id, episode, unique_id, matched_channel_id,
+        "Yuborildi: anime=%s ep=%s uid=%s channel=%s (%s)",
+        anime_id, episode, unique_id, matched_channel_id, chat_title,
     )
 
 
@@ -214,7 +240,6 @@ async def _handle_private_message(event: events.NewMessage.Event) -> None:
 
     for reply in replies:
         if match_pattern(text, reply.pattern, reply.pattern_type):
-            # Odamday kechikish — 1-2 daqiqa (max 5 daqiqa)
             min_delay = settings.AUTO_REPLY_MIN_DELAY
             max_delay = settings.AUTO_REPLY_MAX_DELAY
             delay = random.randint(min_delay, max_delay)
