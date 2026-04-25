@@ -512,7 +512,7 @@ async def cmd_resolve(message: Message, userbot: TelegramClient, command: Any) -
         return
     await message.answer(
         f"<b>{entity.title}</b>\nid: <code>{channel_id_to_db(entity.id)}</code>\n"
-        f"username: @{entity.username or '\u2014'}"
+        f"username: @{entity.username or chr(8212)}"
     )
 
 
