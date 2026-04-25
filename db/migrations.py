@@ -3,6 +3,8 @@
 Eski `watcher_channel_links` (1 qoida = 1 kanal → 1 anime) jadvali bor bo'lsa,
 uning ichidagi qatorlarni yangi `watcher_channel_rules` jadvaliga ko'chiramiz
 (bo'sh pattern bilan — match-all). So'ng eski jadvalni o'chirib tashlaymiz.
+
+Yangi ustunlar (start_episode) migratsiyasi ham shu yerda.
 """
 
 from __future__ import annotations
@@ -59,3 +61,18 @@ async def migrate_legacy_channel_links(engine: AsyncEngine) -> None:
             "Legacy migration: watcher_channel_links -> watcher_channel_rules (%d qator)",
             migrated,
         )
+
+
+async def migrate_add_start_episode(engine: AsyncEngine) -> None:
+    """ChannelRule ga start_episode ustunini qo'shish (agar yo'q bo'lsa)."""
+    async with engine.begin() as conn:
+        columns = await conn.run_sync(
+            lambda sync_conn: [c["name"] for c in inspect(sync_conn).get_columns("watcher_channel_rules")]
+            if "watcher_channel_rules" in inspect(sync_conn).get_table_names()
+            else []
+        )
+        if "start_episode" not in columns and columns:
+            await conn.execute(
+                text("ALTER TABLE watcher_channel_rules ADD COLUMN start_episode INTEGER NOT NULL DEFAULT 1")
+            )
+            log.info("Migration: start_episode ustuni qo'shildi")

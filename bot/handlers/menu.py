@@ -24,12 +24,14 @@ router.message.filter(F.chat.type == "private")
 
 HELP_TEXT = (
     "<b>Kaworai Watcher</b>\n\n"
-    "Men obuna bo'lgan kanallaringizni kuzataman. Har kanal uchun bir yoki bir nechta "
-    "<b>qoida</b> qo'shishingiz mumkin: kalit so'z (yoki regex) + anime ID. "
-    "Yangi video caption-iga qoida mos kelsa — u kaworai SECRET_CHANNEL-ga qism qilib "
-    "avtomatik yuboriladi.\n\n"
-    "Shuningdek, <b>kontakt</b>laringizdan kelgan shaxsiy xabarlarga avtojavob qo'shishingiz mumkin.\n\n"
-    "Boshlash: 📺 Kanallar → ➕ Yangi kanal qo'shish."
+    "Men obuna bo'lgan kanallaringizni kuzataman.\n\n"
+    "<b>1. Qoidalar:</b> Har kanal uchun kalit so'z (yoki regex) + anime nomi/ID qo'shishingiz mumkin.\n"
+    "<b>2. Avtomatik aniqlash:</b> Kaworai bazasidan anime nomi avtomatik aniqlanadi "
+    "(katta/kichik harf farqi yo'q). Qism raqami captiondan olinadi.\n"
+    "<b>3. Boshlang'ich qism:</b> Qoida qo'shganda nechanchi qismdan boshlashni belgilaysiz.\n"
+    "<b>4. Avtojavob:</b> Kontaktlarga 1-2 daqiqa kechikish bilan javob beradi (odamday).\n\n"
+    "Video SECRET_CHANNEL-ga <code>ID: X\\nQism: Y</code> formatida yuboriladi.\n\n"
+    "Boshlash: \U0001f4fa Kanallar \u2192 kanal qo'shish \u2192 qoida qo'shish"
 )
 
 

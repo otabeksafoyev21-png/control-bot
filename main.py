@@ -15,7 +15,7 @@ from bot.handlers import menu as menu_handlers
 from bot.handlers import replies as replies_handlers
 from config import settings
 from db.engine import engine
-from db.migrations import migrate_legacy_channel_links
+from db.migrations import migrate_add_start_episode, migrate_legacy_channel_links
 from db.models import Base
 from userbot.client import build_client
 from userbot.handlers import register as register_userbot_handlers
@@ -32,6 +32,7 @@ async def _init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     await migrate_legacy_channel_links(engine)
+    await migrate_add_start_episode(engine)
 
 
 async def _run() -> None:

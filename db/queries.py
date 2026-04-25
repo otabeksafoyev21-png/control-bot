@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db.models import AutoReply, ChannelRule, ForwardedFile
+from db.models import Anime, AutoReply, ChannelRule, ForwardedFile
 
 # ---------- ChannelRule ----------
 
@@ -17,6 +17,7 @@ async def add_rule(
     pattern: str,
     pattern_type: str,
     anime_id: int,
+    start_episode: int = 1,
     created_by: int,
 ) -> ChannelRule:
     row = ChannelRule(
@@ -24,6 +25,7 @@ async def add_rule(
         pattern=pattern,
         pattern_type=pattern_type,
         anime_id=anime_id,
+        start_episode=start_episode,
         created_by=created_by,
     )
     session.add(row)
@@ -149,3 +151,74 @@ async def mark_forwarded(
 async def recent_forwarded(session: AsyncSession, limit: int = 10) -> list[ForwardedFile]:
     result = await session.scalars(select(ForwardedFile).order_by(ForwardedFile.id.desc()).limit(limit))
     return list(result.all())
+
+
+# ---------- Anime ----------
+
+
+async def find_anime_by_normalized_name(
+    session: AsyncSession, name_normalized: str, season: int | None = None
+) -> Anime | None:
+    stmt = select(Anime).where(Anime.name_normalized == name_normalized)
+    if season is not None:
+        stmt = stmt.where(Anime.season == season)
+    else:
+        stmt = stmt.where(Anime.season.is_(None))
+    result = await session.scalar(stmt)
+    if result is not None:
+        return result
+    if season is not None:
+        fallback = await session.scalar(
+            select(Anime).where(Anime.name_normalized == name_normalized, Anime.season.is_(None))
+        )
+        return fallback
+    return None
+
+
+async def find_anime_by_normalized_name_any(
+    session: AsyncSession, name_normalized: str
+) -> Anime | None:
+    result = await session.scalar(
+        select(Anime).where(Anime.name_normalized == name_normalized).limit(1)
+    )
+    return result
+
+
+async def create_anime(
+    session: AsyncSession,
+    *,
+    name: str,
+    name_normalized: str,
+    season: int | None,
+    created_by: int,
+) -> Anime:
+    row = Anime(
+        name=name,
+        name_normalized=name_normalized,
+        season=season,
+        created_by=created_by,
+    )
+    session.add(row)
+    await session.flush()
+    return row
+
+
+async def list_all_anime(session: AsyncSession) -> list[Anime]:
+    result = await session.scalars(select(Anime).order_by(Anime.id))
+    return list(result.all())
+
+
+async def get_anime(session: AsyncSession, anime_id: int) -> Anime | None:
+    return await session.get(Anime, anime_id)
+
+
+async def remove_anime(session: AsyncSession, *, anime_id: int) -> int:
+    result = await session.execute(delete(Anime).where(Anime.id == anime_id))
+    return result.rowcount or 0
+
+
+async def get_max_episode_for_anime(session: AsyncSession, anime_id: int) -> int:
+    result = await session.scalar(
+        select(func.max(ForwardedFile.episode)).where(ForwardedFile.anime_id == anime_id)
+    )
+    return result or 0

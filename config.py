@@ -25,8 +25,16 @@ class Settings(BaseSettings):
     # Watcher o'z state'ini saqlaydigan SQLite fayli (kanal→anime map, dedup)
     SQLITE_PATH: str = "watcher.db"
 
+    # Kaworai bot PostgreSQL — anime nomi va ID sini olish uchun.
+    # Bo'sh bo'lsa — faqat mahalliy SQLite anime jadvali ishlatiladi.
+    KAWORAI_DATABASE_URL: str = ""
+
     # Parser
     MIN_VIDEO_DURATION: int = 60
+
+    # Avtojavob kechikishi (soniyalarda) — odamday gaplashish uchun
+    AUTO_REPLY_MIN_DELAY: int = 60
+    AUTO_REPLY_MAX_DELAY: int = 120
 
     LOG_LEVEL: str = Field(default="INFO")
 
