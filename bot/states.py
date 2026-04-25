@@ -12,7 +12,9 @@ class AddChannelStates(StatesGroup):
 class AddRuleStates(StatesGroup):
     waiting_for_pattern_type = State()
     waiting_for_pattern = State()
+    waiting_for_anime_name = State()
     waiting_for_anime_id = State()
+    waiting_for_start_episode = State()
 
 
 class AddReplyStates(StatesGroup):

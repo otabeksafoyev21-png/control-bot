@@ -35,6 +35,7 @@ class ChannelRule(Base):
     pattern: Mapped[str] = mapped_column(Text, nullable=False, default="")
     pattern_type: Mapped[str] = mapped_column(String(16), nullable=False, default=PATTERN_SUBSTRING)
     anime_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    start_episode: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -52,6 +53,22 @@ class AutoReply(Base):
     pattern_type: Mapped[str] = mapped_column(String(16), nullable=False, default=PATTERN_SUBSTRING)
     reply_text: Mapped[str] = mapped_column(Text, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Anime(Base):
+    """Anime nomi va ID si — caption dan anime nomini aniqlash uchun.
+
+    name_normalized ustuni case-insensitive qidiruv uchun ishlatiladi.
+    season NULL bo'lsa — fasl ko'rsatilmagan (barcha fasllar).
+    """
+
+    __tablename__ = "watcher_anime"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    name_normalized: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    season: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

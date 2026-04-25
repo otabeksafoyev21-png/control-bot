@@ -40,6 +40,7 @@ from bot.keyboards import (
 )
 from bot.states import AddChannelStates, AddRuleStates
 from db.engine import AsyncSessionLocal
+from db.kaworai import lookup_anime_by_name
 from db.models import PATTERN_REGEX, PATTERN_SUBSTRING
 from db.queries import (
     add_rule,
@@ -49,6 +50,7 @@ from db.queries import (
     remove_rule,
     remove_rules_for_channel,
 )
+from userbot.matcher import normalize_name
 from userbot.rules import validate_regex
 
 log = logging.getLogger(__name__)
@@ -111,9 +113,12 @@ async def _render_channel_detail(cb: CallbackQuery, userbot: TelegramClient, cha
     ]
     if rules:
         for r in rules:
-            pat = r.pattern if r.pattern else "«istalgan»"
+            pat = r.pattern if r.pattern else "\u00abistalgan\u00bb"
             ptype = "regex" if r.pattern_type == PATTERN_REGEX else "matn"
-            lines.append(f"• #{r.id} [<i>{ptype}</i>] <code>{pat}</code> → anime <b>#{r.anime_id}</b>")
+            ep_label = f" (ep\u2265{r.start_episode})" if r.start_episode > 1 else ""
+            lines.append(
+                f"\u2022 #{r.id} [<i>{ptype}</i>] <code>{pat}</code> \u2192 anime <b>#{r.anime_id}</b>{ep_label}"
+            )
     else:
         lines.append("Qoida yo'q. Qo'shish uchun quyidagi tugmani bosing.")
     await msg.edit_text("\n".join(lines), reply_markup=channel_detail(channel_id, rules))
@@ -161,7 +166,7 @@ async def on_add_channel_input(message: Message, state: FSMContext, userbot: Tel
                 await userbot(ImportChatInviteRequest(hash_part))
             await message.answer(
                 "Obuna bo'lindi (invite link orqali).\n"
-                "Kanallarni <b>📺 Kanallar</b> menyusidan ko'rishingiz mumkin, "
+                "Kanallarni <b>\U0001f4fa Kanallar</b> menyusidan ko'rishingiz mumkin, "
                 "ammo qoida qo'shish uchun avval kanal captioni yoki xabari kelib qoladi "
                 "va keyin kanal ro'yxatiga qo'shiladi.",
                 reply_markup=back_to_main(),
@@ -174,7 +179,7 @@ async def on_add_channel_input(message: Message, state: FSMContext, userbot: Tel
         title = getattr(entity, "title", arg)
         await message.answer(
             f"Obuna: <b>{title}</b>\nID: <code>{ch_id}</code>\n\n"
-            "Endi qoida qo'shing — bo'sh qoldirsangiz kanaldagi barcha videolar "
+            "Endi qoida qo'shing \u2014 bo'sh qoldirsangiz kanaldagi barcha videolar "
             "tanlangan anime-ga qism qilib yuboriladi.",
             reply_markup=wizard_cancel(),
         )
@@ -187,7 +192,7 @@ async def on_add_channel_input(message: Message, state: FSMContext, userbot: Tel
     except (InviteHashExpiredError, InviteHashInvalidError):
         await message.answer("Invite link yaroqsiz yoki muddati tugagan.")
     except ChannelPrivateError:
-        await message.answer("Kanal yopiq — invite link kerak.")
+        await message.answer("Kanal yopiq \u2014 invite link kerak.")
     except FloodWaitError as exc:
         await message.answer(f"Telegram rate limit: {exc.seconds}s kutish kerak.")
     except Exception as exc:
@@ -225,10 +230,12 @@ async def cb_rule_ptype(cb: CallbackQuery, state: FSMContext) -> None:
     kind = cb.data.split(":", 2)[2]  # substring | regex | all
     if kind == "all":
         await state.update_data(pattern="", pattern_type=PATTERN_SUBSTRING)
-        await state.set_state(AddRuleStates.waiting_for_anime_id)
+        await state.set_state(AddRuleStates.waiting_for_anime_name)
         await msg.edit_text(
             "Qoida: <b>barcha videolar</b> shu kanaldan.\n\n"
-            "Endi <b>anime ID</b> ni yuboring (butun son, masalan <code>15</code>):",
+            "Endi <b>anime nomini</b> yuboring (masalan: <code>Jodugarlar Jangi</code>).\n"
+            "Kaworai bazasidan avtomatik qidiriladi.\n"
+            "Yoki to'g'ridan-to'g'ri <b>anime ID</b> sini yuboring (raqam).",
             reply_markup=wizard_cancel(),
         )
         await cb.answer()
@@ -237,7 +244,7 @@ async def cb_rule_ptype(cb: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(pattern_type=pattern_type)
     await state.set_state(AddRuleStates.waiting_for_pattern)
     hint = (
-        "Masalan: <code>Naruto</code> — caption ichida shu so'z uchrasa mos keladi (registr muhim emas)."
+        "Masalan: <code>Naruto</code> \u2014 caption ichida shu so'z uchrasa mos keladi (registr muhim emas)."
         if pattern_type == PATTERN_SUBSTRING
         else "Masalan: <code>(?i)naruto\\s*shippuden</code>. Python regex."
     )
@@ -264,15 +271,72 @@ async def on_rule_pattern(message: Message, state: FSMContext) -> None:
             )
             return
     await state.update_data(pattern=pattern)
-    await state.set_state(AddRuleStates.waiting_for_anime_id)
+    await state.set_state(AddRuleStates.waiting_for_anime_name)
     await message.answer(
-        f"Pattern saqlandi: <code>{pattern}</code>\n\n" "Endi <b>anime ID</b> ni yuboring (butun son):",
+        f"Pattern saqlandi: <code>{pattern}</code>\n\n"
+        "Endi <b>anime nomini</b> yuboring (masalan: <code>Jodugarlar Jangi</code>).\n"
+        "Kaworai bazasidan avtomatik qidiriladi.\n"
+        "Yoki to'g'ridan-to'g'ri <b>anime ID</b> sini yuboring (raqam).",
         reply_markup=wizard_cancel(),
     )
 
 
+@router.message(AddRuleStates.waiting_for_anime_name)
+async def on_rule_anime_name(message: Message, state: FSMContext) -> None:
+    """Anime nomi yoki ID qabul qilish. Nomi bo'lsa kaworai DB dan qidirish."""
+    if not is_owner_message(message) or not message.text:
+        return
+    text = message.text.strip()
+
+    # Agar faqat raqam bo'lsa — to'g'ridan-to'g'ri anime ID
+    try:
+        anime_id = int(text)
+        await state.update_data(anime_id=anime_id)
+        await state.set_state(AddRuleStates.waiting_for_start_episode)
+        await message.answer(
+            f"Anime ID: <b>#{anime_id}</b>\n\n"
+            "Endi <b>nechanchi qismdan boshlash</b> kerakligini yuboring.\n"
+            "Masalan: <code>1</code> (boshidan) yoki <code>5</code> (5-qismdan).\n"
+            "Bo'sh qoldirsangiz 1 dan boshlanadi.",
+            reply_markup=wizard_cancel(),
+        )
+        return
+    except ValueError:
+        pass
+
+    # Anime nomi bilan kaworai DB dan qidirish
+    norm = normalize_name(text)
+    if not norm:
+        await message.answer(
+            "Nomi bo'sh bo'lmasligi kerak. Qaytadan yuboring.",
+            reply_markup=wizard_cancel(),
+        )
+        return
+
+    result = await lookup_anime_by_name(norm, season=None)
+    if result is not None:
+        anime_id, title = result
+        await state.update_data(anime_id=anime_id)
+        await state.set_state(AddRuleStates.waiting_for_start_episode)
+        await message.answer(
+            f"Kaworai bazasidan topildi:\n"
+            f"<b>#{anime_id} \u2014 {title}</b>\n\n"
+            "Endi <b>nechanchi qismdan boshlash</b> kerakligini yuboring.\n"
+            "Masalan: <code>1</code> (boshidan) yoki <code>5</code> (5-qismdan).\n"
+            "Bo'sh qoldirsangiz 1 dan boshlanadi.",
+            reply_markup=wizard_cancel(),
+        )
+    else:
+        await state.set_state(AddRuleStates.waiting_for_anime_id)
+        await message.answer(
+            f"Kaworai bazasidan <b>\"{text}\"</b> topilmadi.\n\n"
+            "Iltimos, <b>anime ID</b> ni to'g'ridan-to'g'ri yuboring (butun son):",
+            reply_markup=wizard_cancel(),
+        )
+
+
 @router.message(AddRuleStates.waiting_for_anime_id)
-async def on_rule_anime_id(message: Message, state: FSMContext, userbot: TelegramClient) -> None:
+async def on_rule_anime_id(message: Message, state: FSMContext) -> None:
     if not is_owner_message(message) or not message.text:
         return
     try:
@@ -280,12 +344,43 @@ async def on_rule_anime_id(message: Message, state: FSMContext, userbot: Telegra
     except ValueError:
         await message.answer("Anime ID butun son bo'lishi kerak. Qayta yuboring.")
         return
+    await state.update_data(anime_id=anime_id)
+    await state.set_state(AddRuleStates.waiting_for_start_episode)
+    await message.answer(
+        f"Anime ID: <b>#{anime_id}</b>\n\n"
+        "Endi <b>nechanchi qismdan boshlash</b> kerakligini yuboring.\n"
+        "Masalan: <code>1</code> (boshidan) yoki <code>5</code> (5-qismdan).\n"
+        "Bo'sh qoldirsangiz 1 dan boshlanadi.",
+        reply_markup=wizard_cancel(),
+    )
+
+
+@router.message(AddRuleStates.waiting_for_start_episode)
+async def on_rule_start_episode(message: Message, state: FSMContext, userbot: TelegramClient) -> None:
+    if not is_owner_message(message) or message.text is None:
+        return
+    text = message.text.strip()
+    if not text:
+        start_episode = 1
+    else:
+        try:
+            start_episode = int(text)
+            if start_episode < 1:
+                start_episode = 1
+        except ValueError:
+            await message.answer(
+                "Qism raqami butun son bo'lishi kerak (masalan: <code>1</code>). Qayta yuboring.",
+                reply_markup=wizard_cancel(),
+            )
+            return
+
     data = await state.get_data()
     channel_id = data.get("channel_id")
     pattern = data.get("pattern", "")
     pattern_type = data.get("pattern_type", PATTERN_SUBSTRING)
-    if channel_id is None:
-        await message.answer("Ichki xato: channel_id yo'q. Qaytadan urinib ko'ring.")
+    anime_id = data.get("anime_id")
+    if channel_id is None or anime_id is None:
+        await message.answer("Ichki xato: ma'lumot yo'q. Qaytadan urinib ko'ring.")
         await state.clear()
         return
     async with AsyncSessionLocal() as session:
@@ -294,18 +389,20 @@ async def on_rule_anime_id(message: Message, state: FSMContext, userbot: Telegra
             channel_id=int(channel_id),
             pattern=pattern,
             pattern_type=pattern_type,
-            anime_id=anime_id,
+            anime_id=int(anime_id),
+            start_episode=start_episode,
             created_by=message.from_user.id if message.from_user else 0,
         )
         await session.commit()
     await state.clear()
     title = await get_channel_title(userbot, int(channel_id))
-    pat_display = pattern if pattern else "«istalgan»"
+    pat_display = pattern if pattern else "\u00abistalgan\u00bb"
+    ep_info = f"\nBoshlang'ich qism: <b>{start_episode}</b>" if start_episode > 1 else ""
     await message.answer(
-        f"✅ Qoida qo'shildi:\n"
+        f"Qoida qo'shildi:\n"
         f"Kanal: <b>{title or channel_id}</b>\n"
         f"Pattern: <code>{pat_display}</code> ({pattern_type})\n"
-        f"Anime: <b>#{anime_id}</b>",
+        f"Anime: <b>#{anime_id}</b>{ep_info}",
         reply_markup=back_to_main(),
     )
 
@@ -326,7 +423,7 @@ async def cb_rule_delask(cb: CallbackQuery) -> None:
     if rule is None:
         await cb.answer("Qoida topilmadi", show_alert=True)
         return
-    pat = rule.pattern if rule.pattern else "«istalgan»"
+    pat = rule.pattern if rule.pattern else "\u00abistalgan\u00bb"
     await msg.edit_text(
         f"Qoida <b>#{rule.id}</b> ni o'chirishni tasdiqlaysizmi?\n"
         f"Kanal: <code>{rule.channel_id}</code>\n"
@@ -415,7 +512,7 @@ async def cmd_resolve(message: Message, userbot: TelegramClient, command: Any) -
         return
     await message.answer(
         f"<b>{entity.title}</b>\nid: <code>{channel_id_to_db(entity.id)}</code>\n"
-        f"username: @{entity.username or '—'}"
+        f"username: @{entity.username or '\u2014'}"
     )
 
 
@@ -440,7 +537,7 @@ async def cmd_subscribe(message: Message, userbot: TelegramClient, command: Any)
     except (InviteHashExpiredError, InviteHashInvalidError):
         await message.answer("Invite link yaroqsiz yoki muddati tugagan.")
     except ChannelPrivateError:
-        await message.answer("Kanal yopiq — invite link kerak.")
+        await message.answer("Kanal yopiq \u2014 invite link kerak.")
     except FloodWaitError as exc:
         await message.answer(f"Telegram rate limit: {exc.seconds}s kutish kerak.")
     except Exception as exc:
@@ -466,14 +563,14 @@ async def cmd_unsubscribe(message: Message, userbot: TelegramClient, command: An
 
 @router.message(Command("link"))
 async def cmd_link(message: Message, userbot: TelegramClient, command: Any) -> None:
-    """Legacy: /link <kanal> <anime_id>  — bo'sh pattern bilan qoida qo'shadi."""
+    """Legacy: /link <kanal> <anime_id>  -- bo'sh pattern bilan qoida qo'shadi."""
     if not is_owner_message(message):
         return
     parts = (command.args or "").split()
     if len(parts) != 2:
         await message.answer(
             "Foydalanish: /link &lt;kanal&gt; &lt;anime_id&gt;\n"
-            "Murakkabroq qoidalar uchun /menu → Kanallar dan foydalaning."
+            "Murakkabroq qoidalar uchun /menu \u2192 Kanallar dan foydalaning."
         )
         return
     channel_raw, anime_raw = parts
@@ -504,7 +601,7 @@ async def cmd_link(message: Message, userbot: TelegramClient, command: Any) -> N
         await session.commit()
     title = await get_channel_title(userbot, channel_id)
     await message.answer(
-        f"Qoida qo'shildi: kanal <code>{channel_id}</code> → anime #{anime_id}"
+        f"Qoida qo'shildi: kanal <code>{channel_id}</code> \u2192 anime #{anime_id}"
         + (f" ({title})" if title else "")
     )
 
