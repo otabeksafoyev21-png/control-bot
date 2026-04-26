@@ -19,7 +19,6 @@ from coach.models import STATUS_PENDING
 from coach.motivation import random_nudge
 from coach.queries import (
     get_current_streak,
-    get_previous_streak,
     get_tasks_for_date,
     get_week_stats,
     increment_nudge,
@@ -120,7 +119,7 @@ async def _check_reminders() -> None:
             # 60+ daqiqa — har 30 daqiqada nudge
             if diff_minutes >= 60 and task.nudge_count >= 3:
                 # Har 30 daqiqada
-                since_last = diff_minutes - (task.nudge_count - 2) * 30
+                since_last = diff_minutes - (task.nudge_count - 1) * 30
                 if 0 <= since_last <= 2:
                     await _send_to_owner(random_nudge())
                     await increment_nudge(session, task.id)
@@ -145,10 +144,9 @@ async def _end_of_day() -> None:
                 f"Bugun barcha rejani bajardingiz! Streak: {streak} kun"
             )
         else:
-            prev_streak = await get_previous_streak(session)
-            if prev_streak > 0:
+            if streak > 0:
                 await _send_to_owner(
-                    f"{prev_streak} kunlik streak ketdi. Ertaga qaytadan boshla."
+                    f"{streak} kunlik streak ketdi. Ertaga qaytadan boshla."
                 )
 
 
