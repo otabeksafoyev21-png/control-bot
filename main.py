@@ -14,6 +14,9 @@ from bot.handlers import channels as channels_handlers
 from bot.handlers import menu as menu_handlers
 from bot.handlers import replies as replies_handlers
 from config import settings
+import coach.models as _coach_models  # noqa: F401 — register tables
+from coach.handlers import register_coach_handlers
+from coach.scheduler import start_scheduler
 from db.engine import engine
 from db.migrations import migrate_add_start_episode, migrate_legacy_channel_links
 from db.models import Base
@@ -44,9 +47,14 @@ async def _run() -> None:
 
     userbot = build_client()
     register_userbot_handlers(userbot)
+    register_coach_handlers(userbot)
     await userbot.start()
     me = await userbot.get_me()
     log.info("Userbot ready: @%s (id=%s)", me.username, me.id)
+
+    # Coach scheduler ishga tushirish
+    start_scheduler(userbot)
+    log.info("Coach scheduler ready")
 
     bot_me = await bot.get_me()
     log.info("Control bot ready: @%s (id=%s)", bot_me.username, bot_me.id)
